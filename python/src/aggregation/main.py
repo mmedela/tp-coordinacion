@@ -3,6 +3,15 @@ import logging
 
 from common import middleware, message_protocol, fruit_item
 
+from common.contracts import(
+    Acknowledgment,
+    ResultMessage,
+    DataMessage,
+    EndOfRecordsMessage,
+    serialize_result_message,
+    deserialize_data_or_eof_message,
+)
+
 ID = int(os.environ["ID"])
 MOM_HOST = os.environ["MOM_HOST"]
 OUTPUT_QUEUE = os.environ["OUTPUT_QUEUE"]
@@ -24,37 +33,43 @@ class AggregationFilter:
         )
         self.amount_by_client = {}
 
-    def _process_data(self, client_id, fruit, amount):
+    def _process_data(self, data_message: DataMessage)->None:
         logging.info("Processing data message")
-        amounts_by_fruit = self.amount_by_client.setdefault(client_id, {})
 
-        amounts_by_fruit[fruit] = amounts_by_fruit.get(
-            fruit, fruit_item.FruitItem(fruit, 0)
-        ) + fruit_item.FruitItem(fruit, int(amount))
+        amounts_by_fruit = self.amount_by_client.setdefault(data_message.client_id, {})
 
-    def _process_eof(self, client_id):
+        amounts_by_fruit[data_message.fruit] = amounts_by_fruit.get(
+            data_message.fruit, fruit_item.FruitItem(data_message.fruit, 0)
+        ) + fruit_item.FruitItem(data_message.fruit, data_message.amount)
+
+    def _process_eof(self, eof_message: EndOfRecordsMessage)->None:
         logging.info("Received EOF")
 
-        amounts_by_fruit = self.amount_by_client.pop(client_id, {})
+        amounts_by_fruit = self.amount_by_client.pop(eof_message.Client_id, {})
         ordered_fruits = sorted(amounts_by_fruit.values(), reverse=True)
         fruit_top = [
             (item.fruit, item.amount) for item in ordered_fruits[:TOP_SIZE]
         ]
         
-        self.output_queue.send(message_protocol.internal.serialize([client_id, fruit_top]))
+        self.output_queue.send(
+            serialize_result_message(
+                ResultMessage(
+                    client_id=eof_message.Client_id,
+                    fruit_top=fruit_top
+                )
+            )
+        )
         # del self.fruit_top
 
-    def process_messsage(self, message, ack, nack):
+    def process_messsage(self, message: bytes, ack: Acknowledgment, nack: Acknowledgment)->None:
         try:
 
             logging.info("Process message")
-            fields = message_protocol.internal.deserialize(message)
-            if len(fields) == 3:
-                self._process_data(*fields)
-            elif len(fields) == 1:
-                self._process_eof(*fields)
+            input_message = deserialize_data_or_eof_message(message)
+            if isinstance(input_message, DataMessage):
+                self._process_data(input_message)
             else:
-                raise ValueError(f"Mensaje interno invalido {fields}")
+                self._process_eof(input_message)
             ack()
         except Exception:
             logging.exception("No se pudo procesar un mensaje de Aggregation")
