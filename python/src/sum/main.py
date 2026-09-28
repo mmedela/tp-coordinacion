@@ -47,17 +47,19 @@ class SumFilter:
 
         logging.info(f"Broadcasting EOF message")
         for data_output_exchange in self.data_output_exchanges:
-            data_output_exchange.send(message_protocol.internal.serialize([]))
+            data_output_exchange.send(message_protocol.internal.serialize([client_id]))
 
 
     def process_data_messsage(self, message, ack, nack):
         try:
             
             fields = message_protocol.internal.deserialize(message)
-            if len(fields) == 2:
+            if len(fields) == 3:
                 self._process_data(*fields)
-            else:
+            elif len(fields) == 1:
                 self._process_eof(*fields)
+            else:
+                raise ValueError(f"Mensaje interno invalido: {fields}")
             ack()
         except Exception:
             logging.exception("No se pudo procesar el mensaje de Sum")

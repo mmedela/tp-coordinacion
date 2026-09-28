@@ -38,7 +38,7 @@ class AggregationFilter:
         amounts_by_fruit = self.amount_by_client.pop(client_id, {})
         ordered_fruits = sorted(amounts_by_fruit.values(), reverse=True)
         fruit_top = [
-            (item.fruit, item.amount) for item in ordered_fruits
+            (item.fruit, item.amount) for item in ordered_fruits[:TOP_SIZE]
         ]
         
         self.output_queue.send(message_protocol.internal.serialize([client_id, fruit_top]))
@@ -52,7 +52,7 @@ class AggregationFilter:
             if len(fields) == 3:
                 self._process_data(*fields)
             elif len(fields) == 1:
-                self._process_eof()
+                self._process_eof(*fields)
             else:
                 raise ValueError(f"Mensaje interno invalido {fields}")
             ack()
