@@ -19,26 +19,29 @@ class SumFilter:
             MOM_HOST, INPUT_QUEUE
         )
         self.data_output_exchanges = []
-        for i in range(AGGREGATION_AMOUNT):
+        for aggregator_id in range(AGGREGATION_AMOUNT):
             data_output_exchange = middleware.MessageMiddlewareExchangeRabbitMQ(
-                MOM_HOST, AGGREGATION_PREFIX, [f"{AGGREGATION_PREFIX}_{i}"]
+                MOM_HOST, AGGREGATION_PREFIX, [f"{AGGREGATION_PREFIX}_{aggregator_id}"]
             )
             self.data_output_exchanges.append(data_output_exchange)
-        self.amount_by_fruit = {}
+        self.amount_by_client = {}
 
-    def _process_data(self, fruit, amount):
+    def _process_data(self, client_id, fruit, amount):
         logging.info(f"Process data")
-        self.amount_by_fruit[fruit] = self.amount_by_fruit.get(
+        amounts_by_fruits = self.amount_by_client.setdefault(client_id, {})
+        amounts_by_fruits[fruit] = amounts_by_fruits.get(
             fruit, fruit_item.FruitItem(fruit, 0)
         ) + fruit_item.FruitItem(fruit, int(amount))
 
-    def _process_eof(self):
+    def _process_eof(self, client_id):
         logging.info(f"Broadcasting data messages")
-        for final_fruit_item in self.amount_by_fruit.values():
+        amounts_by_fruits = self.amount_by_client.pop(client_id, {})
+
+        for final_fruit_item in amounts_by_fruits.values():
             for data_output_exchange in self.data_output_exchanges:
                 data_output_exchange.send(
                     message_protocol.internal.serialize(
-                        [final_fruit_item.fruit, final_fruit_item.amount]
+                        [client_id, final_fruit_item.fruit, final_fruit_item.amount]
                     )
                 )
 
@@ -48,12 +51,17 @@ class SumFilter:
 
 
     def process_data_messsage(self, message, ack, nack):
-        fields = message_protocol.internal.deserialize(message)
-        if len(fields) == 2:
-            self._process_data(*fields)
-        else:
-            self._process_eof(*fields)
-        ack()
+        try:
+            
+            fields = message_protocol.internal.deserialize(message)
+            if len(fields) == 2:
+                self._process_data(*fields)
+            else:
+                self._process_eof(*fields)
+            ack()
+        except Exception:
+            logging.exception("No se pudo procesar el mensaje de Sum")
+            nack()
 
     def start(self):
         self.input_queue.start_consuming(self.process_data_messsage)
