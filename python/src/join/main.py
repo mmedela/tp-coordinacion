@@ -1,15 +1,18 @@
 import os
 import logging
-from collections.abc import Callable
-from typing import Any
+from typing import TypeAlias
 
-from common import middleware, message_protocol, fruit_item
+from common import middleware, fruit_item
 
 from common.contracts import(
     Acknowledgment,
+    ClientId,
+    AggregatorId,
+    FruitTop,
     ResultMessage,
+    PartialResultMessage,
     serialize_result_message,
-    deserialize_result_message,
+    deserialize_partial_result_message,
 )
 
 MOM_HOST = os.environ["MOM_HOST"]
@@ -21,6 +24,9 @@ AGGREGATION_AMOUNT = int(os.environ["AGGREGATION_AMOUNT"])
 AGGREGATION_PREFIX = os.environ["AGGREGATION_PREFIX"]
 TOP_SIZE = int(os.environ["TOP_SIZE"])
 
+PartialResultsByAggregator: TypeAlias = dict[AggregatorId, FruitTop]
+PartialResultsByClient: TypeAlias = dict[ClientId, PartialResultsByAggregator]
+
 class JoinFilter:
 
     def __init__(self)->None:
@@ -30,12 +36,38 @@ class JoinFilter:
         self.output_queue = middleware.MessageMiddlewareQueueRabbitMQ(
             MOM_HOST, OUTPUT_QUEUE
         )
+        self.partial_results_by_client: PartialResultsByClient = {}
+
+    def _handle_partial_result(self, partial_message: PartialResultMessage) -> None:
+        client_results = self.partial_results_by_client.setdefault(partial_message.client_id, {})
+        client_results[partial_message.aggregator_id] = partial_message.fruit_top
+
+        if len(client_results) < AGGREGATION_AMOUNT:
+            return
+
+        self.partial_results_by_client.pop(partial_message.client_id, None)
+
+        merged_items = [
+            fruit_item.FruitItem(fruit, amount)
+            for fruit_top in client_results.values()
+            for fruit, amount in fruit_top
+        ]
+        ordered_items = sorted(merged_items, reverse=True)
+        fruit_top = [(item.fruit, item.amount) for item in ordered_items[:TOP_SIZE]]
+
+        self.output_queue.send(
+            serialize_result_message(
+                ResultMessage(
+                    client_id=partial_message.client_id,
+                    fruit_top=fruit_top
+                )
+            )
+        )
 
     def process_messsage(self, message: bytes, ack: Acknowledgment, nack: Acknowledgment)->None:
-        logging.info("Received top")
         try:
-            result_message: ResultMessage = deserialize_result_message(message)
-            self.output_queue.send(serialize_result_message(result_message))
+            partial_message = deserialize_partial_result_message(message)
+            self._handle_partial_result(partial_message)
             ack()
         except Exception:
             logging.exception("No se pudo procesar un mensaje en Join")

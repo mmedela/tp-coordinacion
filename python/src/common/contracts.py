@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import zlib
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, TypeAlias
@@ -16,6 +17,7 @@ FruitTop: TypeAlias = list[FruitRecord]
 SequenceNumber: TypeAlias = int
 RecordCount: TypeAlias = int
 SumId: TypeAlias = int
+AggregatorId: TypeAlias = int
 
 FruitTotals: TypeAlias = dict[FruitName, FruitItem]
 ClientFruitTotals: TypeAlias = dict[ClientId, FruitTotals]
@@ -45,6 +47,12 @@ class EndOfRecordsMessage:
 @dataclass(frozen=True)
 class ResultMessage:
     client_id: ClientId
+    fruit_top: FruitTop
+
+@dataclass(frozen=True)
+class PartialResultMessage:
+    client_id: ClientId
+    aggregator_id: AggregatorId
     fruit_top: FruitTop
 
 @dataclass(frozen=True)
@@ -100,6 +108,11 @@ SumOutputMessage: TypeAlias = (
     | SumFinishedMessage
 )
 
+def aggregator_index_for_fruit(fruit: FruitName, aggregation_amount: int) -> AggregatorId:
+    """Particion deterministica e independiente del proceso (no usa hash() de Python,
+    que esta salteado por PYTHONHASHSEED y daria resultados distintos por replica)."""
+    return zlib.crc32(fruit.encode("utf-8")) % aggregation_amount
+
 def serialize_data_message(data_message: DataMessage) -> bytes:
     return internal.serialize([
         data_message.client_id,
@@ -141,6 +154,32 @@ def deserialize_result_message(message: bytes)->ResultMessage:
 
     client_id, raw_fruit_top = fields
 
+    return ResultMessage(
+        client_id=_parse_client_id(client_id),
+        fruit_top=_parse_fruit_top(raw_fruit_top)
+    )
+
+def serialize_partial_result_message(partial_result_message: PartialResultMessage) -> bytes:
+    return internal.serialize([
+        partial_result_message.client_id,
+        partial_result_message.aggregator_id,
+        partial_result_message.fruit_top
+    ])
+
+def deserialize_partial_result_message(message: bytes) -> PartialResultMessage:
+    fields = _deserialize_exact_fields(
+        message, 3, "Un resultado parcial debe tener exactamente 3 campos"
+    )
+
+    client_id, aggregator_id, raw_fruit_top = fields
+
+    return PartialResultMessage(
+        client_id=_parse_client_id(client_id),
+        aggregator_id=_parse_non_negative_int(aggregator_id, "El id de aggregator"),
+        fruit_top=_parse_fruit_top(raw_fruit_top)
+    )
+
+def _parse_fruit_top(raw_fruit_top: Any) -> FruitTop:
     if not isinstance(raw_fruit_top, list):
         raise InvalidInternalMessageError("El top debe ser una lista")
 
@@ -155,10 +194,7 @@ def deserialize_result_message(message: bytes)->ResultMessage:
             (_parse_fruit(fruit), _parse_amount(amount))
         )
 
-    return ResultMessage(
-        client_id=_parse_client_id(client_id),
-        fruit_top=fruit_top
-    )
+    return fruit_top
 
 
 def serialize_ingestion_data_message(data_message: IngestionDataMessage)->bytes:

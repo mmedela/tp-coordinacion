@@ -23,8 +23,8 @@ from common.contracts import(
     serialize_ingestion_reported_message,
     serialize_flush_message,
     serialize_partial_total_message,
-    serialize_sum_finished_message
-
+    serialize_sum_finished_message,
+    aggregator_index_for_fruit,
 )
 
 COORDINATOR_SUM_ID = 0
@@ -190,16 +190,17 @@ class SumFilter:
             self.local_flushed_clients.add(client_id)
             totals = self.amount_by_client.pop(client_id, {})
 
-        for output_exchange in self.data_output_exchanges:
-            for final_fruit_item in totals.values():
-                output_exchange.send(
-                    serialize_partial_total_message(
-                        PartialTotalMessage(client_id, final_fruit_item.fruit, final_fruit_item.amount)
-                    )
+        for final_fruit_item in totals.values():
+            aggregator_index = aggregator_index_for_fruit(final_fruit_item.fruit, AGGREGATION_AMOUNT)
+            self.data_output_exchanges[aggregator_index].send(
+                serialize_partial_total_message(
+                    PartialTotalMessage(client_id, final_fruit_item.fruit, final_fruit_item.amount)
                 )
-            output_exchange.send(
-                serialize_sum_finished_message(SumFinishedMessage(client_id, ID))
             )
+
+        finished_bytes = serialize_sum_finished_message(SumFinishedMessage(client_id, ID))
+        for output_exchange in self.data_output_exchanges:
+            output_exchange.send(finished_bytes)
 
     def start(self) -> None:
         threads = [

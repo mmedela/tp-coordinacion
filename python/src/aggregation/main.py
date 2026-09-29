@@ -8,10 +8,10 @@ from common import middleware, fruit_item
 from common.contracts import(
     Acknowledgment,
     ClientId,
-    ResultMessage,
+    PartialResultMessage,
     PartialTotalMessage,
     SumFinishedMessage,
-    serialize_result_message,
+    serialize_partial_result_message,
     deserialize_sum_output_message,
 )
 
@@ -66,9 +66,10 @@ class AggregationFilter:
         ]
 
         self.output_queue.send(
-            serialize_result_message(
-                ResultMessage(
+            serialize_partial_result_message(
+                PartialResultMessage(
                     client_id=client_id,
+                    aggregator_id=ID,
                     fruit_top=fruit_top
                 )
             )
