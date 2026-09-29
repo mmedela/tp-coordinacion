@@ -67,22 +67,29 @@ class MessageMiddlewareQueueRabbitMQ(MessageMiddlewareQueue):
 
 class MessageMiddlewareExchangeRabbitMQ(MessageMiddlewareExchange):
     
-    def __init__(self, host, exchange_name, routing_keys):
+    def __init__(self, host: str, exchange_name: str, routing_keys: list[str],  producer_only: bool = False):
         self.exchange_name:str = exchange_name
-        self.routing_keys = routing_keys
+        self.routing_keys:list[str] = routing_keys
+        self.producer_only: bool = producer_only
         self.connection:pika.BlockingConnection = pika.BlockingConnection(pika.ConnectionParameters(host=host))
         self.channel:BlockingChannel = self.connection.channel()
         #Direct porque hay tests con casos "direct messaging" (1 key -> 1 consumidor) y otros
         #tipo "broadcas" (1 key -> muchos consumidores). Permite ambos casos. fanout ignoraria la key
         #y topic no es necesaria para los casos de uso
         self.channel.exchange_declare(exchange=self.exchange_name, exchange_type='direct')
-        declared_queue = self.channel.queue_declare(queue='', exclusive=True)
-        self.queue = declared_queue.method.queue
+
+        self.queue: str | None = None
+
+        if not self.producer_only:
+            declared_queue = self.channel.queue_declare(queue='', exclusive=True)
+            self.queue = declared_queue.method.queue
+
+            for routing_key in self.routing_keys:
+                self.channel.queue_bind(exchange=self.exchange_name, queue=self.queue, routing_key=routing_key)
+
         self._base = _RabbitMQMiddlewareBase(connection=self.connection, channel=self.channel)
 
 
-        for routing_key in self.routing_keys:
-            self.channel.queue_bind(exchange=self.exchange_name, queue=self.queue, routing_key=routing_key)
         
 
     def send(self, message):
@@ -92,6 +99,8 @@ class MessageMiddlewareExchangeRabbitMQ(MessageMiddlewareExchange):
 
 
     def start_consuming(self, on_message_callback):
+        if self.producer_only or self.queue is None:
+            raise MessageMiddlewareMessageError("Un exchange configurado como publisher no puede consumir")
         self._base.start_consuming(queue_name=self.queue, on_message_callback=on_message_callback)
 
     def stop_consuming(self):
