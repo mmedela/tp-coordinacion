@@ -8,6 +8,8 @@ from common import middleware, fruit_item
 from common.contracts import(
     Acknowledgment,
     ClientId,
+    SumId,
+    FruitName,
     PartialResultMessage,
     PartialTotalMessage,
     SumFinishedMessage,
@@ -24,7 +26,8 @@ AGGREGATION_AMOUNT = int(os.environ["AGGREGATION_AMOUNT"])
 AGGREGATION_PREFIX = os.environ["AGGREGATION_PREFIX"]
 TOP_SIZE = int(os.environ["TOP_SIZE"])
 
-FinishedCountByClient: TypeAlias = dict[ClientId, int]
+FinishedSumsByClient: TypeAlias = dict[ClientId, set[SumId]]
+PartialKey: TypeAlias = tuple[ClientId, SumId, FruitName]
 
 
 class AggregationFilter:
@@ -37,12 +40,24 @@ class AggregationFilter:
             MOM_HOST, OUTPUT_QUEUE
         )
         self.amount_by_client = {}
-        self.finished_sums_by_client: FinishedCountByClient = {}
+        self.finished_sums_by_client: FinishedSumsByClient = {}
+        self.applied_partial_keys: set[PartialKey] = set()
+        self.completed_clients: set[ClientId] = set()
 
     def _process_partial_total(self, partial_message: PartialTotalMessage) -> None:
         logging.info("Processing partial total message")
 
-        amounts_by_fruit = self.amount_by_client.setdefault(partial_message.client_id, {})
+        client_id = partial_message.client_id
+        if client_id in self.completed_clients:
+            return
+
+        partial_key: PartialKey = (client_id, partial_message.sum_id, partial_message.fruit)
+        if partial_key in self.applied_partial_keys:
+            logging.info("Total parcial duplicado de sum %s, descartando", partial_message.sum_id)
+            return
+        self.applied_partial_keys.add(partial_key)
+
+        amounts_by_fruit = self.amount_by_client.setdefault(client_id, {})
 
         amounts_by_fruit[partial_message.fruit] = amounts_by_fruit.get(
             partial_message.fruit, fruit_item.FruitItem(partial_message.fruit, 0)
@@ -52,12 +67,19 @@ class AggregationFilter:
         logging.info("Received SumFinishedMessage from sum %s", finished_message.sum_id)
 
         client_id = finished_message.client_id
-        finished_count = self.finished_sums_by_client.get(client_id, 0) + 1
-        self.finished_sums_by_client[client_id] = finished_count
-
-        if finished_count < SUM_AMOUNT:
+        if client_id in self.completed_clients:
             return
 
+        finished_sums = self.finished_sums_by_client.setdefault(client_id, set())
+        if finished_message.sum_id in finished_sums:
+            logging.info("SumFinishedMessage duplicado de sum %s, descartando", finished_message.sum_id)
+            return
+        finished_sums.add(finished_message.sum_id)
+
+        if len(finished_sums) < SUM_AMOUNT:
+            return
+
+        self.completed_clients.add(client_id)
         self.finished_sums_by_client.pop(client_id, None)
         amounts_by_fruit = self.amount_by_client.pop(client_id, {})
         ordered_fruits = sorted(amounts_by_fruit.values(), reverse=True)

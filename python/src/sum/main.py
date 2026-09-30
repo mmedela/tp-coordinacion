@@ -90,6 +90,7 @@ class SumFilter:
 
         self.amount_by_client: ClientFruitTotals = {}
         self.local_flushed_clients: set[ClientId] = set()
+        self.applied_sequences_by_client: SequencesByClient = {}
 
         self.reported_sequences_by_client: SequencesByClient = {}
         self.expected_records_by_client: RecordCountsByClient = {}
@@ -99,6 +100,17 @@ class SumFilter:
     def _handle_ingestion_data(self, data_message: IngestionDataMessage) -> None:
         logging.info(f"Start ingesting data of client {data_message.client_id}")
         with self.state_lock:
+            applied_sequences = self.applied_sequences_by_client.setdefault(
+                data_message.client_id, set()
+            )
+            if data_message.sequence in applied_sequences:
+                logging.info(
+                    "Secuencia %s de cliente %s ya fue aplicada, descartando duplicado",
+                    data_message.sequence, data_message.client_id
+                )
+                return
+            applied_sequences.add(data_message.sequence)
+
             totals = self.amount_by_client.setdefault(data_message.client_id, {})
             totals[data_message.fruit] = totals.get(
                 data_message.fruit, fruit_item.FruitItem(data_message.fruit, 0)
@@ -189,12 +201,13 @@ class SumFilter:
                 return
             self.local_flushed_clients.add(client_id)
             totals = self.amount_by_client.pop(client_id, {})
+            self.applied_sequences_by_client.pop(client_id, None)
 
         for final_fruit_item in totals.values():
             aggregator_index = aggregator_index_for_fruit(final_fruit_item.fruit, AGGREGATION_AMOUNT)
             self.data_output_exchanges[aggregator_index].send(
                 serialize_partial_total_message(
-                    PartialTotalMessage(client_id, final_fruit_item.fruit, final_fruit_item.amount)
+                    PartialTotalMessage(client_id, ID, final_fruit_item.fruit, final_fruit_item.amount)
                 )
             )
 
