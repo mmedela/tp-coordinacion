@@ -35,16 +35,6 @@ class InvalidInternalMessageError(ValueError):
     """El mensaje no cumple el contrato interno de la aplicaicon"""
 
 @dataclass(frozen=True)
-class DataMessage:
-    client_id: ClientId
-    fruit: FruitName
-    amount: Amount
-
-@dataclass(frozen=True)
-class EndOfRecordsMessage:
-    Client_id: ClientId
-
-@dataclass(frozen=True)
 class ResultMessage:
     client_id: ClientId
     fruit_top: FruitTop
@@ -113,38 +103,11 @@ def aggregator_index_for_fruit(fruit: FruitName, aggregation_amount: int) -> Agg
     que esta salteado por PYTHONHASHSEED y daria resultados distintos por replica)."""
     return zlib.crc32(fruit.encode("utf-8")) % aggregation_amount
 
-def serialize_data_message(data_message: DataMessage) -> bytes:
-    return internal.serialize([
-        data_message.client_id,
-        data_message.fruit,
-        data_message.amount
-    ])
-
 def serialize_result_message(result_message: ResultMessage) -> bytes:
     return internal.serialize([
         result_message.client_id,
         result_message.fruit_top
     ])
-
-def serialize_eof_message(eof_message: EndOfRecordsMessage) -> bytes:
-    return internal.serialize([eof_message.Client_id])
-
-def deserialize_data_or_eof_message(message: bytes) -> DataMessage | EndOfRecordsMessage:
-    fields = _deserialize_fields(message)
-
-    if len(fields) == 3:
-        client_id, fruit, amount = fields
-        return DataMessage(
-            client_id=_parse_client_id(client_id),
-            fruit=_parse_fruit(fruit),
-            amount=_parse_amount(amount)
-        )
-    if len(fields) == 1:
-        return EndOfRecordsMessage(
-            Client_id=_parse_client_id(fields[0])
-        )
-
-    raise InvalidInternalMessageError("Un mensaje de entrada debe tener 1 o 3 campos")
 
 def deserialize_result_message(message: bytes)->ResultMessage:
     fields = _deserialize_fields(message)
