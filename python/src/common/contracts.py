@@ -69,6 +69,7 @@ class FlushMessage:
 @dataclass(frozen=True)
 class PartialTotalMessage:
     client_id: ClientId
+    sum_id: SumId
     fruit: FruitName
     amount: Amount
 
@@ -233,6 +234,7 @@ def deserialize_flush_message(message: bytes)->FlushMessage:
 def serialize_partial_total_message(partial_total_message: PartialTotalMessage)->bytes:
     return internal.serialize([
         partial_total_message.client_id,
+        partial_total_message.sum_id,
         partial_total_message.fruit,
         partial_total_message.amount
     ])
@@ -240,13 +242,14 @@ def serialize_partial_total_message(partial_total_message: PartialTotalMessage)-
 def deserialize_partial_total_message(message: bytes) -> PartialTotalMessage:
 
     fields = _deserialize_exact_fields(
-        message, 3, "Un total parcial debe tener tres campos"
+        message, 4, "Un total parcial debe tener cuatro campos"
     )
 
-    client_id, fruit, amount = fields
+    client_id, sum_id, fruit, amount = fields
 
     return PartialTotalMessage(
         client_id=_parse_client_id(client_id),
+        sum_id=_parse_non_negative_int(sum_id, "El id de sum"),
         fruit=_parse_fruit(fruit),
         amount=_parse_amount(amount)
     )
@@ -322,10 +325,11 @@ def deserialize_sum_control_message(message:bytes)->SumControlMessage:
 def deserialize_sum_output_message(message: bytes) -> SumOutputMessage:
     fields = _deserialize_fields(message)
 
-    if len(fields) == 3:
-        client_id, fruit, amount = fields
+    if len(fields) == 4:
+        client_id, sum_id, fruit, amount = fields
         return PartialTotalMessage(
             client_id=_parse_client_id(client_id),
+            sum_id=_parse_non_negative_int(sum_id, "El id de sum"),
             fruit=_parse_fruit(fruit),
             amount=_parse_amount(amount)
         )
@@ -337,7 +341,7 @@ def deserialize_sum_output_message(message: bytes) -> SumOutputMessage:
             sum_id=_parse_non_negative_int(sum_id, "El id de sum"),
         )
 
-    raise InvalidInternalMessageError("Un mensaje de salida de Sum debe tener 2 o 3 campos")
+    raise InvalidInternalMessageError("Un mensaje de salida de Sum debe tener 2 o 4 campos")
 
 def deserialize_ingestion_message(message:bytes)->IngestionMessage:
     fields = _deserialize_fields(message)
