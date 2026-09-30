@@ -1,5 +1,6 @@
 import os
 import logging
+import signal
 
 from typing import TypeAlias
 
@@ -43,6 +44,12 @@ class AggregationFilter:
         self.finished_sums_by_client: FinishedSumsByClient = {}
         self.applied_partial_keys: set[PartialKey] = set()
         self.completed_clients: set[ClientId] = set()
+
+        signal.signal(signal.SIGTERM, self._handle_sigterm)
+
+    def _handle_sigterm(self, signum, frame) -> None:
+        logging.info("Received SIGTERM signal")
+        self.input_exchange.stop_consuming()
 
     def _process_partial_total(self, partial_message: PartialTotalMessage) -> None:
         logging.info("Processing partial total message")
@@ -113,6 +120,8 @@ class AggregationFilter:
 
     def start(self):
         self.input_exchange.start_consuming(self.process_messsage)
+        self.input_exchange.close()
+        self.output_queue.close()
 
 
 def main():

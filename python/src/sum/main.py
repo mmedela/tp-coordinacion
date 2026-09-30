@@ -1,5 +1,6 @@
 import os
 import logging
+import signal
 import threading
 from typing import TypeAlias
 
@@ -95,6 +96,31 @@ class SumFilter:
         self.reported_sequences_by_client: SequencesByClient = {}
         self.expected_records_by_client: RecordCountsByClient = {}
         self.coordinator_flushed_clients: set[ClientId] = set()
+
+        signal.signal(signal.SIGTERM, self._handle_sigterm)
+
+    def _handle_sigterm(self, signum, frame) -> None:
+        logging.info("Received SIGTERM signal")
+        # Cada cola corre su propio start_consuming() en un thread con su propia
+        # conexion pika; stop_consuming() no es seguro entre threads salvo que se
+        # agende via add_callback_threadsafe en la conexion duena del loop.
+        for consuming_queue in self._consuming_queues():
+            consuming_queue.connection.add_callback_threadsafe(consuming_queue.stop_consuming)
+
+    def _consuming_queues(self) -> list["middleware.MessageMiddlewareQueueRabbitMQ"]:
+        queues = [self.input_queue, self.flush_input_queue]
+        if self.coordinator_input_queue is not None:
+            queues.append(self.coordinator_input_queue)
+        return queues
+
+    def _close(self) -> None:
+        for queue in self._consuming_queues():
+            queue.close()
+        self.coordinator_output_queue.close()
+        for flush_queue in self.flush_output_queues:
+            flush_queue.close()
+        for output_exchange in self.data_output_exchanges:
+            output_exchange.close()
 
 
     def _handle_ingestion_data(self, data_message: IngestionDataMessage) -> None:
@@ -228,6 +254,7 @@ class SumFilter:
             thread.start()
         for thread in threads:
             thread.join()
+        self._close()
 
 def main():
     logging.basicConfig(level=logging.INFO)

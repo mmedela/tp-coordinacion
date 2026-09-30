@@ -1,5 +1,6 @@
 import os
 import logging
+import signal
 from typing import TypeAlias
 
 from common import middleware, fruit_item
@@ -38,6 +39,12 @@ class JoinFilter:
         )
         self.partial_results_by_client: PartialResultsByClient = {}
 
+        signal.signal(signal.SIGTERM, self._handle_sigterm)
+
+    def _handle_sigterm(self, signum, frame) -> None:
+        logging.info("Received SIGTERM signal")
+        self.input_queue.stop_consuming()
+
     def _handle_partial_result(self, partial_message: PartialResultMessage) -> None:
         client_results = self.partial_results_by_client.setdefault(partial_message.client_id, {})
         client_results[partial_message.aggregator_id] = partial_message.fruit_top
@@ -75,6 +82,8 @@ class JoinFilter:
 
     def start(self)->None:
         self.input_queue.start_consuming(self.process_messsage)
+        self.input_queue.close()
+        self.output_queue.close()
 
 
 def main()->int:
